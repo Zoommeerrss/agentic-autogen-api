@@ -1,0 +1,13 @@
+requests>=2.31.0
+pydantic>=2.0.0
+
+# Versão openai
+openai>=1.0.0
+pyautogen==0.2.35
+python-dotenv>=1.0.0
+
+# Versão moderna do AutoGen (v0.4+)
+autogen-core>=0.4.0
+autogen-agentchat>=0.4.0
+autogen-ext[openai]>=0.4.0
+pytest
