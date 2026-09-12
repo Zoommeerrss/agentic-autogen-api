@@ -32,7 +32,7 @@ def lambda_handler(event, context):
         # O bloco return DEVE estar neste exato nível de indentação (alinhado ao try)
         return {
             "statusCode": 200,
-            "body": json.dumps({"data": person, }),
+            "body": json.dumps({"data": person}, default=lambda o: o.__dict__),
         }
 
     except Exception as e:
