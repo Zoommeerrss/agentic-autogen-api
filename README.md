@@ -9,32 +9,48 @@ Este projeto é uma esteira de produção 100% local e automatizada para a cria�
 O sistema orquestra 4 agentes especialistas que trabalham em sincronia de fluxo contínuo conforme o diagrama abaixo:
 
 ```mermaid
-graph LR
-    subgraph Entrada e Infraestrutura
-        LM[🖥️ LM Studio]
-        SD[🎨 SD WebUI Forge]
+graph TD
+    %% Estilos Globais
+    classDef fase1 fill:#1f1f2e,stroke:#4a4ae2,stroke-width:2px,color:#fff;
+    classDef fase2 fill:#2d1a2d,stroke:#c342c3,stroke-width:2px,color:#fff;
+    classDef executor fill:#1a2b1a,stroke:#2da44e,stroke-width:2px,color:#fff;
+    classDef user fill:#2d2d2d,stroke:#888,stroke-width:2px,color:#fff;
+
+    %% Elementos do Fluxo
+    Autor[✍️ Autor / UserProxy]:::user
+    
+    subgraph FASE_1 [📝 FASE 1: Planejamento Conceitual & Texto]
+        Lore[🎭 Lore_Creator]:::fase1
+        Artist[🎨 Artist_Agent]:::fase1
+        Archivist[🗄️ Archivist_Agent]:::fase1
     end
 
-    subgraph Esteira de Agentes AutoGen
-        LC[✍️ Lore_Creator]
-        AA[🎨 Artist_Agent]
-        IG[⚙️ Image_Generator_Agent]
-        AV[📚 Archivist_Agent]
+    subgraph FASE_2 [⚡ FASE 2: Processamento e Renderização Pesada]
+        ImgGen[⚙️ Image_Generator_Agent]:::executor
+        Forge[🖼️ API Stable Diffusion Forge]:::fase2
+        SSD[(💾 Armazenamento SSD Local)]:::user
     end
 
-    %% Fluxo de Texto e Criação
-    LM --> LC
-    LC -->|1. Enredo e Cenas| AA
-    LM --> AA
+    %% Relações e Fluxo de Trabalho
+    Autor -->|1. Envia Ideia Inicial| Lore
+    Lore -->|2. Cria Enredo Sombrio & Cenas| Artist
+    Artist -->|3. Projeta lista de Prompts Técnicos em Texto| Archivist
     
-    %% Fluxo de Imagem
-    AA -->|2. Prompts e Tags| IG
-    IG <-->|3. Requisições API| SD
+    Archivist -->|4. Monta Documento Final .md| Archivist
+    Archivist -->|5. Dispara: salvar_capitulo_manga| ImgGen
+    ImgGen -->|6. Grava Arquivo Texto| SSD
     
-    %% Compilação Final
-    LC -.->|Texto Base| AV
-    IG -->|4. Imagens PNG| AV
-    AV -->|5. Output Final .md| Output[📁 Pasta Output]
+    %% Loop da Fase 2 (Geração pós-salvamento)
+    ImgGen -.->|7. Confirma Sucesso do .md| Archivist
+    Archivist -->|8. Inicia Lote: desenhar_e_salvar_quadro| ImgGen
+    ImgGen -->|9. Envia Requisição POST via 127.0.0.1| Forge
+    Forge -->|10. Processa SDXL com 16GB RAM + medvram| Forge
+    Forge -->|11. Retorna Imagem Base64| ImgGen
+    ImgGen -->|12. Salva capitulo_x_quadro_y.png| SSD
+    
+    ImgGen -.->|13. Finaliza Lote de Imagens| Archivist
+    Archivist -->|14. Imprime no Chat| Encerramento[🏁 FIM]:::user
+
 
 ```
 
@@ -56,10 +72,17 @@ Para rodar o projeto no **Ubuntu**, você precisa de três componentes ativos:
 ### 2. Stable Diffusion WebUI Forge (Gerador de Imagens)
 * **Modelo Checkpoint:** `animagine-xl-3.1.safetensors` (ou superior) colocado na pasta de modelos do Forge.
 * **Inicialização Obrigatória:** O Forge deve ser iniciado via terminal com a flag da API ativa:
-  ```bash
-  ./webui.sh --api --listen --port 7860
-  ```
-  *(Recomendado usar `--lowvram` para placas de 6GB de VRAM como a GTX 1660 Ti).*
+```bash
+# default
+./webui.sh --api --listen --port 7860
+
+# low memory
+./webui.sh --api --listen --port 7860 --skip-python-version-check --lowvram
+
+# middle memory
+./webui.sh --api --listen --port 7860 --skip-python-version-check --medvram-sdxl --always-offload-from-vram
+```
+*(Recomendado usar `--lowvram` para placas de 6GB de VRAM como a GTX 1660 Ti).*
 
 ### 3. Ambiente Python do Projeto
 * Instale as dependências contidas no projeto (`pyautogen`, `requests`, `python-dotenv`).
@@ -121,6 +144,12 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 *(Você saberá que deu certo quando ver `(.venv)` no início da linha do terminal).*
+
+Depois execute o script principal:
+
+```bash
+python3 app_manga.py
+```
 
 #### 4. Instalar as Dependências
 Com o ambiente ativo, atualize o gerenciador e instale o arquivo de requerimentos:
