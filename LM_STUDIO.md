@@ -1,6 +1,6 @@
 # 🚀 Instalação do LM Studio no Ubuntu 24.04 LTS (WSL)
 
-Este guia prático documenta o passo a passo completo para instalar e executar o **LM Studio** dentro do ambiente **WSL (Windows Subsystem for Linux)** rodando **Ubuntu 24.04 (Noble Numbat)**, incluindo soluções para erros de dependências de interface gráfica e restrições de sandbox.
+Este guia prático documenta o passo a passo completo para instalar e executar o **LM Studio** dentro do ambiente **WSL (Windows Subsystem for Linux)** rodando **Ubuntu 24.04 (Noble Numbat)**, incluindo soluções para erros de dependências de interface gráfica, restrições de sandbox e execução de modelos.
 
 ---
 
@@ -13,7 +13,7 @@ sudo apt update && sudo apt install libfuse2 -y
 ```
 
 ### 2. Baixar o LM Studio
-Crie ou acesse a sua pasta de Downloads e baixe a versão estável para Linux:
+Acesse a sua pasta de Downloads e baixe a versão estável para Linux:
 ```bash
 cd ~/Downloads
 wget https://lmstudio.ai
@@ -45,23 +45,30 @@ sudo chown root chrome-sandbox && sudo chmod 4755 chrome-sandbox
   ```
   *(Ou use `./AppRun --no-sandbox` se preferir o atalho unificado).*
 
-### Erro 2: `error while loading shared libraries: libnss3.so`
+### Erro 2: `error while loading shared libraries: libnss3.so` e ausência de interface
 * **Causa:** O WSL vem sem nenhuma biblioteca de interface gráfica (GUI) instalada por padrão.
 * **Solução:** Instalar o ecossistema gráfico básico do Chromium/X11.
 
 ### Erro 3: `E: Package 'libasound2' has no installation candidate`
-* **Causa:** No Ubuntu 24.04 (Noble Numbat), os pacotes de biblioteca de 64 bits foram renomeados com o sufixo `t64` devido à transição do ano 2038.
-* **Solução (Comando definitivo de dependências para Ubuntu 24.04):**
-  Instale todas as bibliotecas necessárias utilizando os nomes atualizados do sistema:
+* **Causa:** No Ubuntu 24.04 (Noble Numbat), os pacotes de biblioteca de 64 bits foram renomeados com o sufixo `t64` devido à transição de arquitetura do ano 2038.
+* **Solução (Comando de dependências para Ubuntu 24.04):**
+  Instale todas as bibliotecas necessárias utilizando os nomes atualizados do sistema de uma só vez:
   ```bash
   sudo apt update && sudo apt install -y libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libasound2t64
+  ```
+
+### Erro 4: `libgomp.so.1: cannot open shared object file` ao carregar o modelo de IA
+* **Causa:** O motor de execução interno (baseado em CUDA/llama.cpp) precisa da biblioteca OpenMP para gerenciar o processamento paralelo em múltiplos núcleos da máquina.
+* **Solução:** Instale o pacote contendo a biblioteca de processamento multi-core:
+  ```bash
+  sudo apt update && sudo apt install -y libgomp1
   ```
 
 ---
 
 ## 🚀 Como Inicializar Corretamente no WSL
 
-Após instalar todas as dependências do Ubuntu 24.04, navegue até a pasta extraída e execute o aplicativo **desativando o sandbox nativo** (essencial para o funcionamento estável dentro do WSLg):
+Após instalar todas as dependências do Ubuntu 24.04, navegue até a pasta extraída e execute o aplicativo desativando o sandbox nativo (essencial para o funcionamento estável dentro do subsistema WSLg do Windows 11):
 
 ```bash
 cd ~/Downloads/squashfs-root
@@ -72,5 +79,5 @@ cd ~/Downloads/squashfs-root
 
 ## ⚡ Próximos Passos Recomendados
 
-1. **Ativar o WSLg:** Certifique-se de que o seu Windows 11 está atualizado para que a interface gráfica do Linux (WSLg) renderize a tela do aplicativo automaticamente no seu desktop Windows.
-2. **Configuração de GPU:** Por padrão, o LM Studio no WSL rodará modelos usando apenas o processador (CPU). Caso possua uma placa de vídeo dedicada (NVIDIA/AMD), instale os drivers de GPU adequados dentro do subsistema Linux para habilitar a aceleração por hardware (CUDA/ROCm).
+1. **Ativar o WSLg:** Certifique-se de que o seu Windows 11 está atualizado para que a interface gráfica do Linux (WSLg) renderize a tela do aplicativo automaticamente no seu desktop.
+2. **Configuração de GPU:** Por padrão, o LM Studio no WSL rodará modelos usando apenas o processador (CPU). Caso possua uma placa de vídeo dedicada (NVIDIA/AMD), instale os drivers de GPU correspondentes dentro do subsistema Linux para habilitar a aceleração por hardware (CUDA/ROCm) e acelerar as respostas.
