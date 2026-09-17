@@ -4,4 +4,9 @@ Para cada quadro, você deve entregar no chat o formato de texto:
 - **ID do Quadro**: capitulo_1_quadro_1.png
 - **Prompt Técnico**: [Tags em inglês aqui]
 
-NÃO chame a função de desenho. Apenas entregue a lista de prompts em texto puro para o Archivist_Agent compilar.
+Regras para projetar a historia:
+1. Nao crie novos capitulos. 
+2. Respeite a lista do Lore_Creator sem desvios. 
+3. Os prompts dos capitulos DEVEM conter as configurações de geração das imagens, formato LANDSCAPE, estilo wallpaper do Teams
+4. NÃO chame a função de desenho. Apenas entregue a lista de prompts em texto puro para o Archivist_Agent compilar.
+5. NÃO encerre o processo e nem o fluxo. Isso não é sua responsabilidade.

@@ -8,6 +8,8 @@ import time
 from urllib import request, parse
 from pathlib import Path
 from dotenv import load_dotenv
+import gc
+import torch
 
 current_dir = Path(__file__).resolve().parent
 if str(current_dir) not in sys.path:
@@ -19,112 +21,73 @@ load_dotenv(dotenv_path=env_path)
 LM_SERVER_V1 = os.getenv('LM_SERVER_V1')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 LM_MODEL_LORE = os.getenv('LM_MODEL_LORE')
+DIFFUSION_SERVER = os.getenv('DIFFUSION_SERVER')
 
 output_dir = current_dir.parent / "output"
 images_dir = output_dir / "images"
 images_dir.mkdir(parents=True, exist_ok=True)
-
+    
 def desenhar_e_salvar_quadro(prompt_ingles: str, nome_arquivo_png: str) -> str:
     """
-    Consome a API local do ComfyUI na abordagem oficial (urllib.request).
-    Estratégia 'Dispara e Desapega': Envia o prompt para a fila da GPU e encerra o turno,
-    deixando o ComfyUI renderizar e salvar o arquivo de forma assíncrona.
-    """
-    SERVER_ADDRESS = "127.0.0.1:8188"
+    Consome a API local do Stable Diffusion WebUI Forge (porta 7860).
+    """    
     
     if not nome_arquivo_png.lower().endswith(".png"):
         nome_arquivo_png = f"{nome_arquivo_png}.png"
 
-    # WORKFLOW API OFICIAL: Configura o nó de salvamento final para gravar direto na pasta certa
-    # Usando o caminho absoluto do seu projeto para salvar nativamente sem intermediação do loop Python
-    caminho_absoluto_salvamento = str(images_dir / nome_arquivo_png.replace(".png", ""))
+    caminho_final_salvamento = images_dir / nome_arquivo_png
 
-    workflow_comfy = {
-        "4": {
-            "inputs": {"ckpt_name": "animagine-xl-3.1.safetensors"},
-            "class_type": "CheckpointLoaderSimple"
+    payload = {
+        "prompt": f"masterpiece, dark fantasy manga style, black and white lineart, highly detailed ink sketch, severe crosshatching, {prompt_ingles}",
+        "negative_prompt": "color, photo, realistic, lowres, bad anatomy, blurry, low quality, sketch, duplicate",
+        "seed": 42,
+        "steps": 20, 
+        "cfg_scale": 7.0,
+        "width": 512,
+        "height": 512,
+        "sampler_name": "Euler a",  
+        "scheduler": "Automatic",
+        "override_settings": {
+            "sd_model_checkpoint": "Counterfeit-V3.0_fp16.safetensors"
         },
-        "6": {
-            "inputs": {
-                "text": f"masterpiece, dark fantasy manga style, black and white lineart, highly detailed ink sketch, severe crosshatching, {prompt_ingles}",
-                "clip": ["4", 1]
-            },
-            "class_type": "CLIPTextEncode"
-        },
-        "7": {
-            "inputs": {
-                "text": "color, photo, realistic, lowres, bad anatomy, blurry, low quality, sketch, duplicate",
-                "clip": ["4", 1]
-            },
-            "class_type": "CLIPTextEncode"
-        },
-        "5": {
-            "inputs": {
-                "seed": 42, 
-                "steps": 25,
-                "cfg": 7.0,
-                "sampler_name": "euler_ancestral", 
-                "scheduler": "normal",
-                "denoise": 1.0,
-                "model": ["4", 0],
-                "positive": ["6", 0],
-                "negative": ["7", 0],
-                "latent_image": ["8", 0]
-            },
-            "class_type": "KSampler"
-        },
-        "8": {
-            "inputs": {"width": 640, "height": 960, "batch_size": 1},
-            "class_type": "EmptyLatentImage"
-        },
-        "9": {
-            "inputs": {"samples": ["5", 0], "vae": ["4", 2]},
-            "class_type": "VAEDecode"
-        },
-        "10": {
-            "inputs": {
-                "filename_prefix": caminho_absoluto_salvamento, 
-                "images": ["9", 0]
-            },
-            "class_type": "PreviewImage" 
-        }
+        "tiling": False,
+        "restore_faces": False
     }
 
     try:
-        print(f"\n⚡ [COMFYUI API] Injetando quadro na fila de processamento: {nome_arquivo_png}...")
+        print(f"\n⚡ [FORGE API] Enviando requisição para renderizar quadro: {nome_arquivo_png}...")
         
-        # ABORDAGEM OFICIAL DO PORTAL: ENVIO DO PROMPT
-        p = {"prompt": workflow_comfy}
-        data = json.dumps(p).encode("utf-8")
-        req = request.Request(f"http://{SERVER_ADDRESS}/prompt", data=data, headers={"Content-Type": "application/json"})
+        # Retornado ao seu padrão original estrito
+        url_api = f"http://{DIFFUSION_SERVER}/sdapi/v1/txt2img"
+        data = json.dumps(payload).encode("utf-8")
+        req = request.Request(url_api, data=data, headers={"Content-Type": "application/json"})
         
         with request.urlopen(req) as response:
             result = json.loads(response.read().decode("utf-8"))
-            prompt_id = result.get("prompt_id")
             
-        # RETORNO IMEDIATO: Libera o agente técnico sem loops de timeout
-        return f"Sucesso! Comando enviado para a fila do ComfyUI (ID: {prompt_id}). A imagem será gerada em segundo plano."
+            if "images" in result and len(result["images"]) > 0:
+                imagem_base64 = result["images"][0]
+                
+                with open(caminho_final_salvamento, "wb") as f:
+                    f.write(base64.b64decode(imagem_base64))
+                
+                return f"Sucesso! Imagem gerada e salva localmente em: {caminho_final_salvamento}"
+            else:
+                return "Falha: A API do Forge respondeu, mas não retornou nenhuma imagem no payload."
 
     except Exception as e:
-        return f"Falha ao conectar no ComfyUI: {str(e)}. Certifique-se de que o ComfyUI está ativo em {SERVER_ADDRESS}."
+        return f"Falha ao conectar no Forge: {str(e)}. Certifique-se de iniciar o Forge com a flag '--api' ativa em {DIFFUSION_SERVER}."
 
 def salvar_capitulo_manga(titulo_capitulo: str, conteudo_markdown: str) -> str:
     """
     Tool que o arquivista executa para salvar a lore.
-    Nomeia o arquivo automaticamente como capitulo_1.md, capitulo_2.md, etc.
     """
     try:
-        # 1. Lista todos os arquivos .md existentes na pasta output
         arquivos_existentes = list(output_dir.glob("capitulo_*.md"))
-        
-        # 2. Define o próximo número sequencial com base na quantidade de arquivos existentes
         proximo_numero = len(arquivos_existentes) + 1
-        
-        # 3. Força o padrão rígido e limpo de nomenclatura
         nome_arquivo = f"capitulo_{proximo_numero}.md"
         caminho_final = output_dir / nome_arquivo
 
-        # 4. Grava o conteúdo físico no SSD do WSL
         with open(caminho_final, "w", encoding="utf-8") as file:
             file.write(conteudo_markdown)
             return f"Capítulo salvo com sucesso em: {caminho_final}"
@@ -140,13 +103,22 @@ def carrega_prompt(nome_arquivo):
     except FileNotFoundError:
         return "Você é um assistente prestativo participante de uma equipe de criação de mangás."
 
-
 config_hermes = {
     "config_list": [{
         "model": LM_MODEL_LORE,
         "base_url": LM_SERVER_V1,
         "api_key": OPENAI_API_KEY,
         "temperature": 0.5 
+    }],
+    "cache_seed": None,
+}
+
+config_manager = {
+    "config_list": [{
+        "model": LM_MODEL_LORE,
+        "base_url": LM_SERVER_V1,
+        "api_key": OPENAI_API_KEY,
+        "temperature": 0.0
     }],
     "cache_seed": None,
 }
@@ -166,9 +138,10 @@ artist_agent = autogen.AssistantAgent(
 image_generator = autogen.UserProxyAgent(
     name="Image_Generator_Agent",
     human_input_mode="NEVER",
-    max_consecutive_auto_reply=15, # Expandido para aguentar o lote contínuo de imagens no final
+    max_consecutive_auto_reply=15, 
     code_execution_config={"work_dir": str(output_dir), "use_docker": False},
-    system_message=carrega_prompt("image_generator.md")
+    system_message=carrega_prompt("image_generator.md"),
+    default_auto_reply="Resultado da execução processado. Archivist_Agent, prossiga com o próximo passo ou envie 'FIM' caso terminei."
 )
 
 archivist_agent = autogen.AssistantAgent(
@@ -181,10 +154,14 @@ user_proxy = autogen.UserProxyAgent(
     name="Autor",
     human_input_mode="NEVER",
     max_consecutive_auto_reply=1,
-    is_termination_msg=lambda x: "FIM" in x.get("content", "").upper()
+    is_termination_msg=lambda x: "FIM" in x.get("content", "").upper(),
+    code_execution_config={
+        "use_docker": False 
+    }
 )
 
-autogen.register_function(
+# Registro das funções utilizando o escopo correto do framework
+autogen.agentchat.register_function(
     salvar_capitulo_manga,
     caller=archivist_agent,
     executor=image_generator,
@@ -192,39 +169,42 @@ autogen.register_function(
     description="Grava o arquivo final contendo toda a história e TODOS os prompts projetados antes de desenhar."
 )
 
-autogen.register_function(
+autogen.agentchat.register_function(
     desenhar_e_salvar_quadro,
-    caller=archivist_agent, # AGORA EXCLUSIVO: O arquivista executa o lote após salvar o documento completo
+    caller=archivist_agent,
     executor=image_generator,
     name="desenhar_e_salvar_quadro",
     description="Gera uma imagem real no Forge a partir de um prompt específico pós-planejamento."
 )
 
-image_generator.register_function(
-    function_map={
-        "desenhar_e_salvar_quadro": desenhar_e_salvar_quadro,
-        "salvar_capitulo_manga": salvar_capitulo_manga,
-    }
-)
-
+# Fluxo obrigatório linear estrito
 allowed_transitions = {
-    user_proxy: [lore_creator],                # O Autor só passa a bola para o criador da história
-    lore_creator: [artist_agent],              # A história vai para o designer de prompts
-    artist_agent: [archivist_agent],            # Os prompts vão para o arquivista compilar tudo
-    archivist_agent: [image_generator],         # O arquivista chama as ferramentas (salvar_md e desenhar)
-    image_generator: [archivist_agent]          # O executor devolve o sucesso sempre para o arquivista
+    user_proxy: [lore_creator],
+    lore_creator: [artist_agent],
+    artist_agent: [archivist_agent],
+    archivist_agent: [image_generator],
+    image_generator: [archivist_agent]
 }
 
 groupchat = autogen.GroupChat(
     agents=[user_proxy, lore_creator, artist_agent, archivist_agent, image_generator],
     messages=[],
-    max_round=35,
+    max_round=40, 
     speaker_selection_method="auto",
-    allowed_or_disallowed_speaker_transitions=allowed_transitions, # Força o grafo de estados
+    allowed_or_disallowed_speaker_transitions=allowed_transitions,
     speaker_transitions_type="allowed"
 )
 
-manager = autogen.GroupChatManager(groupchat=groupchat, llm_config=config_hermes)
+manager = autogen.GroupChatManager(
+    groupchat=groupchat, 
+    llm_config=config_manager,
+    system_message=(
+        "Você é o coordenador do grupo. Siga o fluxo linear restrito: "
+        "Autor -> Lore_Creator -> Artist_Agent -> Archivist_Agent -> Image_Generator_Agent. "
+        "Sempre que Archivist_Agent gerar chamadas de ferramentas, passe a vez estritamente para o Image_Generator_Agent."
+    ),
+    is_termination_msg=lambda x: "FIM" in x.get("content", "").upper()
+)
 
 if __name__ == "__main__":
     ideia_manga = (
