@@ -2,14 +2,13 @@ import os
 import sys
 import base64
 import autogen
-import requests
 import json
 import time
 from urllib import request, parse
 from pathlib import Path
 from dotenv import load_dotenv
-import gc
-import torch
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+from autogen.cache import Cache  # 💡 ADICIONE ESTA LINHA
 
 current_dir = Path(__file__).resolve().parent
 if str(current_dir) not in sys.path:
@@ -19,19 +18,96 @@ env_path = current_dir / '.env'
 load_dotenv(dotenv_path=env_path)
 
 LM_SERVER_V1 = os.getenv('LM_SERVER_V1')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY') or "local-token"
 LM_MODEL_LORE = os.getenv('LM_MODEL_LORE')
 DIFFUSION_SERVER = os.getenv('DIFFUSION_SERVER')
 
 output_dir = current_dir.parent / "output"
 images_dir = output_dir / "images"
 images_dir.mkdir(parents=True, exist_ok=True)
-    
-def desenhar_e_salvar_quadro(prompt_ingles: str, nome_arquivo_png: str) -> str:
+
+def adicionar_balao_de_fala(caminho_imagem: Path, texto_dialogo: str):
     """
-    Consome a API local do Stable Diffusion WebUI Forge (porta 7860).
+    Função de pós-processamento gráfico que limpa repetições do LLM,
+    desenha um balão de mangá clássico e insere o diálogo por cima da imagem.
+    """
+    if not texto_dialogo or texto_dialogo.strip() == "":
+        return
+
+    try:
+        # 🧼 TRATAMENTO DE LIMPEZA: Remove redundâncias comuns do LLM (ex: "Fubuki fala com Yuuki:")
+        texto_limpo = texto_dialogo.strip()
+        if ":" in texto_limpo:
+            # Pega apenas o que vem depois dos dois pontos se houver descrição de fala antes
+            partes = texto_limpo.split(":", 1)
+            # Se o que está antes contém verbos de fala, limpa
+            if any(palavra in partes[0].lower() for palavra in ["fala", "disse", "responde", "com", "para"]):
+                texto_limpo = partes[1].strip()
+
+        # Remove aspas extras que possam ter vindo no parâmetro
+        texto_limpo = texto_limpo.replace('"', '').replace("'", "")
+
+        img = Image.open(caminho_imagem).convert("RGBA")
+        draw = ImageDraw.Draw(img)
+        
+        # Tenta carregar uma fonte de quadrinhos, senão usa a padrão
+        try:
+            font = ImageFont.truetype("Comic_Sans_MS.ttf", 16)
+        except IOError:
+            font = ImageFont.load_default()
+
+        # Configurações do texto e quebra automática de linhas (Usa o texto_limpo agora)
+        largura_maxima_caracteres = 25
+        palavras = texto_limpo.split()
+        linhas = []
+        linha_atual = ""
+        
+        for palavra in palavras:
+            if len(linha_atual + " " + palavra) <= largura_maxima_caracteres:
+                linha_atual += (" " if linha_atual else "") + palavra
+            else:
+                linhas.append(linha_atual)
+                linha_atual = palavra
+        if linha_atual:
+            linhas.append(linha_atual)
+            
+        texto_formatado = "\n".join(linhas)
+
+        # Calcula o tamanho do bloco de texto para dimensionar o balão
+        caixa_texto = draw.textbbox((0, 0), texto_formatado, font=font)
+        largura_texto = caixa_texto[2] - caixa_texto[0]
+        altura_texto = caixa_texto[3] - caixa_texto[1]
+
+        # Define a posição do balão (topo esquerdo da imagem com margem)
+        margem = 20
+        pad = 15
+        x0 = margem
+        y0 = margem
+        x1 = x0 + largura_texto + (pad * 2)
+        y1 = y0 + altura_texto + (pad * 2)
+
+        # Desenha a elipse branca do balão com contorno preto (estilo mangá)
+        draw.ellipse([x0, y0, x1, y1], fill="white", outline="black", width=3)
+        
+        # Desenha a "seta" ou cauda do balão apontando para baixo/personagem
+        draw.polygon([((x0+x1)//2 - 10, y1 - 2), ((x0+x1)//2 + 10, y1 - 2), ((x0+x1)//2, y1 + 15)], fill="white", outline="black")
+        draw.polygon([((x0+x1)//2 - 8, y1 - 4), ((x0+x1)//2 + 8, y1 - 4), ((x0+x1)//2, y1 + 12)], fill="white")
+
+        # Escreve o diálogo centralizado dentro do balão
+        draw.text((x0 + pad, y0 + pad), texto_formatado, fill="black", font=font)
+        
+        # Salva o quadrinho finalizado substituindo a imagem limpa
+        final_img = img.convert("RGB")
+        final_img.save(caminho_imagem, "PNG")
+        print(f"🎨 [DIAGRAMAÇÃO] Balão de fala aplicado com sucesso em {caminho_imagem.name}!")
+        
+    except Exception as e:
+        print(f"❌ Erro ao desenhar balão de fala: {str(e)}")
+
+def desenhar_e_salvar_quadro(prompt_ingles: str, nome_arquivo_png: str, dialogo_texto: str = "") -> str:
+    """
+    Consome a API local do Stable Diffusion WebUI Forge e depois aplica o balão de fala clássico.
     """    
-    
     if not nome_arquivo_png.lower().endswith(".png"):
         nome_arquivo_png = f"{nome_arquivo_png}.png"
 
@@ -56,27 +132,26 @@ def desenhar_e_salvar_quadro(prompt_ingles: str, nome_arquivo_png: str) -> str:
 
     try:
         print(f"\n⚡ [FORGE API] Enviando requisição para renderizar quadro: {nome_arquivo_png}...")
-        
-        # Retornado ao seu padrão original estrito
         url_api = f"http://{DIFFUSION_SERVER}/sdapi/v1/txt2img"
         data = json.dumps(payload).encode("utf-8")
         req = request.Request(url_api, data=data, headers={"Content-Type": "application/json"})
         
         with request.urlopen(req) as response:
             result = json.loads(response.read().decode("utf-8"))
-            
             if "images" in result and len(result["images"]) > 0:
                 imagem_base64 = result["images"][0]
-                
                 with open(caminho_final_salvamento, "wb") as f:
                     f.write(base64.b64decode(imagem_base64))
                 
-                return f"Sucesso! Imagem gerada e salva localmente em: {caminho_final_salvamento}"
+                # CHAMADA CRÍTICA: Aplica o balão gráfico clássico por cima da imagem gerada
+                if dialogo_texto:
+                    adicionar_balao_de_fala(caminho_final_salvamento, dialogo_texto)
+                
+                return f"Sucesso! Imagem {nome_arquivo_png} gerada e diagramada com sucesso."
             else:
                 return "Falha: A API do Forge respondeu, mas não retornou nenhuma imagem no payload."
-
     except Exception as e:
-        return f"Falha ao conectar no Forge: {str(e)}. Certifique-se de iniciar o Forge com a flag '--api' ativa em {DIFFUSION_SERVER}."
+        return f"Falha ao conectar no Forge: {str(e)}."
 
 def salvar_capitulo_manga(titulo_capitulo: str, conteudo_markdown: str) -> str:
     """
@@ -91,7 +166,6 @@ def salvar_capitulo_manga(titulo_capitulo: str, conteudo_markdown: str) -> str:
         with open(caminho_final, "w", encoding="utf-8") as file:
             file.write(conteudo_markdown)
             return f"Capítulo salvo com sucesso em: {caminho_final}"
-            
     except Exception as e:
         return f"Erro ao arquivar capítulo: {str(e)}"
 
@@ -102,42 +176,16 @@ def carrega_prompt(nome_arquivo):
             return file.read().strip()
     except FileNotFoundError:
         return "Você é um assistente prestativo participante de uma equipe de criação de mangás."
-    
-# 🧠 FUNÇÃO DE TRANSIÇÃO CUSTOMIZADA (Resolve falhas de fluxo em modelos locais)
-def custom_speaker_selection(last_speaker, groupchat):
-    messages = groupchat.messages
-    if not messages:
-        return lore_creator
-        
-    last_msg = messages[-1]
-    
-    # Se uma ferramenta foi chamada pelo Archivist, o executor (Image_Generator) DEVE responder
-    if "tool_calls" in last_msg or last_speaker == archivist_agent:
-        if "tool_calls" in last_msg:
-            return image_generator
-            
-    # Se o Image_Generator acabou de executar, devolve para o Archivist continuar a fila de quadros
-    if last_speaker == image_generator:
-        return archivist_agent
-        
-    # Fluxo linear padrão para a fase de criação de conteúdo
-    if last_speaker == user_proxy:
-        return lore_creator
-    elif last_speaker == lore_creator:
-        return artist_agent
-    elif last_speaker == artist_agent:
-        return archivist_agent
-        
-    return "auto"
 
 config_hermes = {
     "config_list": [{
         "model": LM_MODEL_LORE,
         "base_url": LM_SERVER_V1,
         "api_key": OPENAI_API_KEY,
-        "temperature": 0.5 
+        "temperature": 0.4
     }],
     "cache_seed": None,
+    "timeout": 1200,
 }
 
 config_manager = {
@@ -148,6 +196,7 @@ config_manager = {
         "temperature": 0.0
     }],
     "cache_seed": None,
+    "timeout": 1200,
 }
 
 lore_creator = autogen.AssistantAgent(
@@ -165,10 +214,10 @@ artist_agent = autogen.AssistantAgent(
 image_generator = autogen.UserProxyAgent(
     name="Image_Generator_Agent",
     human_input_mode="NEVER",
-    max_consecutive_auto_reply=15, 
+    max_consecutive_auto_reply=25, 
     code_execution_config={"work_dir": str(output_dir), "use_docker": False},
     system_message=carrega_prompt("image_generator.md"),
-    default_auto_reply="Resultado da execução processado. Archivist_Agent, prossiga com o próximo passo ou envie 'FIM' caso terminei."
+    default_auto_reply="Resultado da execução processado pelo executor. Archivist_Agent, prossiga com a próxima chamada de ferramenta ou envie 'FIM' se encerrou."
 )
 
 archivist_agent = autogen.AssistantAgent(
@@ -182,12 +231,9 @@ user_proxy = autogen.UserProxyAgent(
     human_input_mode="NEVER",
     max_consecutive_auto_reply=1,
     is_termination_msg=lambda x: "FIM" in x.get("content", "").upper(),
-    code_execution_config={
-        "use_docker": False 
-    }
+    code_execution_config={"use_docker": False}
 )
 
-# Registro das funções
 autogen.agentchat.register_function(
     salvar_capitulo_manga,
     caller=archivist_agent,
@@ -201,22 +247,36 @@ autogen.agentchat.register_function(
     caller=archivist_agent,
     executor=image_generator,
     name="desenhar_e_salvar_quadro",
-    description="Gera uma imagem real no Forge a partir de um prompt específico pós-planejamento."
+    description="Gera a imagem no Forge recebendo o prompt em inglês, o nome do arquivo png E o texto de diálogo do balão para diagramação."
 )
 
-# Fluxo obrigatório linear estrito
-allowed_transitions = {
-    user_proxy: [lore_creator],
-    lore_creator: [artist_agent],
-    artist_agent: [archivist_agent],
-    archivist_agent: [image_generator],
-    image_generator: [archivist_agent]
-}
+def custom_speaker_selection(last_speaker, groupchat):
+    messages = groupchat.messages
+    if not messages:
+        return lore_creator
+        
+    last_msg = messages[-1]
+    
+    if "tool_calls" in last_msg or last_speaker == archivist_agent:
+        if "tool_calls" in last_msg:
+            return image_generator
+            
+    if last_speaker == image_generator:
+        return archivist_agent
+        
+    if last_speaker == user_proxy:
+        return lore_creator
+    elif last_speaker == lore_creator:
+        return artist_agent
+    elif last_speaker == artist_agent:
+        return archivist_agent
+        
+    return "auto"
 
 groupchat = autogen.GroupChat(
     agents=[user_proxy, lore_creator, artist_agent, archivist_agent, image_generator],
     messages=[],
-    max_round=60, # Expandido para dar tempo de rodar todas as páginas
+    max_round=60,
     speaker_selection_method=custom_speaker_selection
 )
 
@@ -235,4 +295,11 @@ if __name__ == "__main__":
     )
 
     print("\n🚀 [AUTO-MANGA] Iniciando a esteira 100% local e automatizada...")
-    user_proxy.initiate_chat(manager, message=ideia_manga)
+    print("\n💾 [CACHE] Inicializando cache em disco para otimização de tokens...")
+    
+    with Cache.disk(cache_seed=42) as cache:
+        user_proxy.initiate_chat(
+            manager, 
+            message=ideia_manga,
+            cache=cache  # 💡 PASSE O OBJETO DE CACHE AQUI
+        )
