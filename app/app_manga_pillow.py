@@ -106,7 +106,8 @@ def adicionar_balao_de_fala(caminho_imagem: Path, texto_dialogo: str):
 
 def desenhar_e_salvar_quadro(prompt_ingles: str, nome_arquivo_png: str, dialogo_texto: str = "") -> str:
     """
-    Consome a API local do Stable Diffusion WebUI Forge e depois aplica o balão de fala clássico.
+    Consome a API local do Stable Diffusion WebUI Forge e força a sobrescrita 
+    da imagem existente no disco com o novo resultado gerado.
     """    
     if not nome_arquivo_png.lower().endswith(".png"):
         nome_arquivo_png = f"{nome_arquivo_png}.png"
@@ -117,12 +118,12 @@ def desenhar_e_salvar_quadro(prompt_ingles: str, nome_arquivo_png: str, dialogo_
         "prompt": f"masterpiece, dark fantasy manga style, black and white lineart, highly detailed ink sketch, severe crosshatching, {prompt_ingles}",
         "negative_prompt": "color, photo, realistic, lowres, bad anatomy, blurry, low quality, sketch, duplicate",
         "seed": 42,
-        "steps": 20, 
+        "steps": 12, 
         "cfg_scale": 7.0,
         "width": 512,
         "height": 512,
         "sampler_name": "Euler a",  
-        "scheduler": "Automatic",
+        "scheduler": "Normal",
         "override_settings": {
             "sd_model_checkpoint": "Counterfeit-V3.0_fp16.safetensors"
         },
@@ -140,10 +141,12 @@ def desenhar_e_salvar_quadro(prompt_ingles: str, nome_arquivo_png: str, dialogo_
             result = json.loads(response.read().decode("utf-8"))
             if "images" in result and len(result["images"]) > 0:
                 imagem_base64 = result["images"][0]
+                
+                # O modo "wb" limpa o arquivo antigo automaticamente ao abrir
                 with open(caminho_final_salvamento, "wb") as f:
                     f.write(base64.b64decode(imagem_base64))
                 
-                # CHAMADA CRÍTICA: Aplica o balão gráfico clássico por cima da imagem gerada
+                # Aplica o balão gráfico por cima da imagem nova recém-salva
                 if dialogo_texto:
                     adicionar_balao_de_fala(caminho_final_salvamento, dialogo_texto)
                 
@@ -176,6 +179,39 @@ def carrega_prompt(nome_arquivo):
             return file.read().strip()
     except FileNotFoundError:
         return "Você é um assistente prestativo participante de uma equipe de criação de mangás."
+    
+def montar_pagina_manga_pillow(capitulo_num: int) -> str:
+    """
+    Pega as 6 imagens individuais geradas de 512x512 para o capítulo informado
+    e as une corretamente (grade 2x3) acessando cada índice individual da lista.
+    """
+    try:
+        # Mapeia o caminho dos 6 quadros gerados
+        quadros = [images_dir / f"capitulo_{capitulo_num}_quadro_{i}.png" for i in range(1, 7)]
+        
+        # Abre as 6 imagens utilizando o diretório dinâmico correto
+        imagens = [Image.open(q) for q in quadros]
+        
+        # Cria a imagem em branco da página unificada (2 colunas de 512 = 1024 | 3 linhas de 512 = 1536)
+        pagina_final = Image.new('RGB', (1024, 1536), color='white')
+        
+        # 🛡️ CORREÇÃO CRÍTICA: Acessando cada imagem individualmente por seu índice na lista [0 a 5]
+        pagina_final.paste(imagens[0], (0, 0))         # Linha 1 - Esquerda (Quadro 1)
+        pagina_final.paste(imagens[1], (512, 0))       # Linha 1 - Direita  (Quadro 2)
+        pagina_final.paste(imagens[2], (0, 512))       # Linha 2 - Esquerda (Quadro 3)
+        pagina_final.paste(imagens[3], (512, 512))     # Linha 2 - Direita  (Quadro 4)
+        pagina_final.paste(imagens[4], (0, 1024))      # Linha 3 - Esquerda (Quadro 5)
+        pagina_final.paste(imagens[5], (512, 1024))    # Linha 3 - Direita  (Quadro 6)
+        
+        nome_saida = f"capitulo_{capitulo_num}_pagina_completa.png"
+        caminho_saida = output_dir / nome_saida
+        pagina_final.save(caminho_saida, "PNG")
+        
+        print(f"✨ [DIAGRAMAÇÃO] Página de mangá/Infográfico unificado (6 quadros distintos) salvo com sucesso em {caminho_saida.name}!")
+        return f"Sucesso! Infográfico unificado gerado e salvo como {nome_saida}."
+        
+    except Exception as e:
+        return f"Erro ao executar a ferramenta de montagem de página com 6 quadros: {str(e)}"
 
 config_hermes = {
     "config_list": [{
@@ -250,6 +286,14 @@ autogen.agentchat.register_function(
     description="Gera a imagem no Forge recebendo o prompt em inglês, o nome do arquivo png E o texto de diálogo do balão para diagramação."
 )
 
+autogen.agentchat.register_function(
+    montar_pagina_manga_pillow,
+    caller=archivist_agent,
+    executor=image_generator,
+    name="montar_pagina_manga_pillow",
+    description="Recebe o número do capítulo (ex: 1) e combina as 4 imagens individuais de 512x512 em um único infográfico/página unificada de 1024x1024."
+)
+
 def custom_speaker_selection(last_speaker, groupchat):
     messages = groupchat.messages
     if not messages:
@@ -257,11 +301,19 @@ def custom_speaker_selection(last_speaker, groupchat):
         
     last_msg = messages[-1]
     
-    if "tool_calls" in last_msg or last_speaker == archivist_agent:
-        if "tool_calls" in last_msg:
+    # 🛡️ BLINDAGEM DE FERRAMENTAS: Verifica se o Archivist solicitou uma ferramenta de verdade
+    # independentemente do texto do template obrigatório ao redor.
+    if last_speaker == archivist_agent:
+        if last_msg.get("tool_calls") or "tool_calls" in last_msg:
             return image_generator
-            
+        # Se o Archivist respondeu com o template mas NÃO gerou chamadas e nem disse 'FIM',
+        # força a validação ou devolve o controle para o ciclo.
+        if "FIM" in last_msg.get("content", "").upper():
+            return user_proxy
+
     if last_speaker == image_generator:
+        # Após o executor local rodar, a vez DEVE voltar obrigatoriamente para o Archivist
+        # decidir o próximo passo (próximo quadro ou montagem).
         return archivist_agent
         
     if last_speaker == user_proxy:
@@ -289,17 +341,14 @@ manager = autogen.GroupChatManager(
 
 if __name__ == "__main__":
     ideia_manga = (
-        "Crie o CAPÍTULO 1 de um mangá sobre um jovem ferreiro chamado Yuuki que descobre uma espada "
-        "amaldiçoada por um dragão antigo em um reino medieval tomado pela névoa. Yuuki se torna um herói, doma o dragão e se casa com a princesa Fubuki, uma moça encantadora e com um corpo extremamente sexy e ardente."
-        "Foque apenas no primeiro capítulo detalhadamente."
+        """
+        Crie o CAPÍTULO 1 de um mangá sobre um jovem ferreiro chamado Yuuki que descobre uma espada amaldiçoada por um dragão antigo em um reino medieval tomado pela névoa. 
+        Yuuki se torna um herói ao domar o dragão que vira seu familiar.
+        Yuuki se casa com a princesa Fubuki, uma moça encantadora e com um corpo extremamente sexy e ardente. 
+        Ele a beija na cena final!
+        Foque apenas no primeiro capítulo detalhadamente.
+        """
     )
 
-    print("\n🚀 [AUTO-MANGA] Iniciando a esteira 100% local e automatizada...")
-    print("\n💾 [CACHE] Inicializando cache em disco para otimização de tokens...")
-    
-    with Cache.disk(cache_seed=42) as cache:
-        user_proxy.initiate_chat(
-            manager, 
-            message=ideia_manga,
-            cache=cache  # 💡 PASSE O OBJETO DE CACHE AQUI
-        )
+    print("\n🚀 [AUTO-MANGA] Iniciando a esteira 100% local e automatizada...")    
+    user_proxy.initiate_chat(manager, message=ideia_manga)

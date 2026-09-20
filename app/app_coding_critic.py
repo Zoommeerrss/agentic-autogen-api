@@ -74,7 +74,7 @@ user_proxy.register_nested_chats(
     trigger=engineer,
 )
 
-task = """Write a snake game using Pygame."""
+task = """Write a space invaders game."""
 
 print("\n💾 [CACHE] Inicializando cache em disco para otimização de tokens...")
 
